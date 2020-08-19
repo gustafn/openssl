@@ -14,6 +14,7 @@
 #include <openssl/params.h>
 #include <openssl/opensslv.h>
 #include "crypto/cryptlib.h"
+#include "crypto/evp.h" /* evp_method_store_flush */
 #include "internal/nelem.h"
 #include "internal/thread_once.h"
 #include "internal/provider.h"
@@ -71,6 +72,7 @@ struct ossl_provider_st {
     OSSL_FUNC_provider_gettable_params_fn *gettable_params;
     OSSL_FUNC_provider_get_params_fn *get_params;
     OSSL_FUNC_provider_get_capabilities_fn *get_capabilities;
+    OSSL_FUNC_provider_self_test_fn *self_test;
     OSSL_FUNC_provider_query_operation_fn *query_operation;
 
     /*
@@ -191,6 +193,17 @@ static struct provider_store_st *get_provider_store(OPENSSL_CTX *libctx)
     if (store == NULL)
         CRYPTOerr(CRYPTO_F_GET_PROVIDER_STORE, ERR_R_INTERNAL_ERROR);
     return store;
+}
+
+int ossl_provider_disable_fallback_loading(OPENSSL_CTX *libctx)
+{
+    struct provider_store_st *store;
+
+    if ((store = get_provider_store(libctx)) != NULL) {
+        store->use_fallbacks = 0;
+        return 1;
+    }
+    return 0;
 }
 
 OSSL_PROVIDER *ossl_provider_find(OPENSSL_CTX *libctx, const char *name,
@@ -544,6 +557,10 @@ static int provider_activate(OSSL_PROVIDER *prov)
             prov->get_params =
                 OSSL_FUNC_provider_get_params(provider_dispatch);
             break;
+        case OSSL_FUNC_PROVIDER_SELF_TEST:
+            prov->self_test =
+                OSSL_FUNC_provider_self_test(provider_dispatch);
+            break;
         case OSSL_FUNC_PROVIDER_GET_CAPABILITIES:
             prov->get_capabilities =
                 OSSL_FUNC_provider_get_capabilities(provider_dispatch);
@@ -611,7 +628,6 @@ static int provider_activate(OSSL_PROVIDER *prov)
 
     /* With this flag set, this provider has become fully "loaded". */
     prov->flag_initialized = 1;
-
     return 1;
 }
 
@@ -825,6 +841,18 @@ int ossl_provider_get_params(const OSSL_PROVIDER *prov, OSSL_PARAM params[])
         ? 0 : prov->get_params(prov->provctx, params);
 }
 
+int ossl_provider_self_test(const OSSL_PROVIDER *prov)
+{
+    int ret;
+
+    if (prov->self_test == NULL)
+        return 1;
+    ret = prov->self_test(prov->provctx);
+    if (ret == 0)
+        evp_method_store_flush(ossl_provider_library_context(prov));
+    return ret;
+}
+
 int ossl_provider_get_capabilities(const OSSL_PROVIDER *prov,
                                    const char *capability,
                                    OSSL_CALLBACK *cb,
@@ -833,7 +861,6 @@ int ossl_provider_get_capabilities(const OSSL_PROVIDER *prov,
     return prov->get_capabilities == NULL
         ? 1 : prov->get_capabilities(prov->provctx, capability, cb, arg);
 }
-
 
 const OSSL_ALGORITHM *ossl_provider_query_operation(const OSSL_PROVIDER *prov,
                                                     int operation_id,
@@ -1062,6 +1089,8 @@ static const OSSL_DISPATCH core_dispatch_[] = {
     { OSSL_FUNC_BIO_NEW_MEMBUF, (void (*)(void))BIO_new_mem_buf },
     { OSSL_FUNC_BIO_READ_EX, (void (*)(void))BIO_read_ex },
     { OSSL_FUNC_BIO_WRITE_EX, (void (*)(void))BIO_write_ex },
+    { OSSL_FUNC_BIO_GETS, (void (*)(void))BIO_gets },
+    { OSSL_FUNC_BIO_PUTS, (void (*)(void))BIO_puts },
     { OSSL_FUNC_BIO_FREE, (void (*)(void))BIO_free },
     { OSSL_FUNC_BIO_VPRINTF, (void (*)(void))BIO_vprintf },
     { OSSL_FUNC_BIO_VSNPRINTF, (void (*)(void))BIO_vsnprintf },

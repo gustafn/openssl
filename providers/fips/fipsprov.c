@@ -7,32 +7,22 @@
  * https://www.openssl.org/source/license.html
  */
 
-#include <string.h>
-#include <stdio.h>
-#include <openssl/core.h>
 #include <openssl/core_dispatch.h>
 #include <openssl/core_names.h>
 #include <openssl/params.h>
-#include <openssl/err.h>
-#include <openssl/evp.h>
-#include <openssl/kdf.h>
-
-/* TODO(3.0): Needed for dummy_evp_call(). To be removed */
-#include <openssl/sha.h>
-#include <openssl/rand_drbg.h>
-#include <openssl/ec.h>
+#include <openssl/obj_mac.h> /* NIDs used by ossl_prov_util_nid_to_name() */
 #include <openssl/fips_names.h>
-
+#include <openssl/rand.h> /* RAND_get0_public() */
 #include "internal/cryptlib.h"
-#include "internal/property.h"
-#include "internal/nelem.h"
-#include "openssl/param_build.h"
-#include "crypto/evp.h"
 #include "prov/implementations.h"
 #include "prov/provider_ctx.h"
 #include "prov/providercommon.h"
+#include "prov/providercommonerr.h"
 #include "prov/provider_util.h"
 #include "self_test.h"
+
+static const char FIPS_DEFAULT_PROPERTIES[] = "provider=fips,fips=yes";
+static const char FIPS_UNAPPROVED_PROPERTIES[] = "provider=fips,fips=no";
 
 /*
  * Forward declarations to ensure that interface functions are correctly
@@ -43,7 +33,7 @@ static OSSL_FUNC_provider_gettable_params_fn fips_gettable_params;
 static OSSL_FUNC_provider_get_params_fn fips_get_params;
 static OSSL_FUNC_provider_query_operation_fn fips_query;
 
-#define ALGC(NAMES, FUNC, CHECK) { { NAMES, "provider=fips,fips=yes", FUNC }, CHECK }
+#define ALGC(NAMES, FUNC, CHECK) { { NAMES, FIPS_DEFAULT_PROPERTIES, FUNC }, CHECK }
 #define ALG(NAMES, FUNC) ALGC(NAMES, FUNC, NULL)
 
 extern OSSL_FUNC_core_thread_start_fn *c_thread_start;
@@ -79,6 +69,8 @@ static OSSL_FUNC_CRYPTO_secure_free_fn *c_CRYPTO_secure_free;
 static OSSL_FUNC_CRYPTO_secure_clear_free_fn *c_CRYPTO_secure_clear_free;
 static OSSL_FUNC_CRYPTO_secure_allocated_fn *c_CRYPTO_secure_allocated;
 static OSSL_FUNC_BIO_vsnprintf_fn *c_BIO_vsnprintf;
+static OSSL_FUNC_self_test_cb_fn *c_stcbfn = NULL;
+static OSSL_FUNC_core_get_library_context_fn *c_get_libctx = NULL;
 
 typedef struct fips_global_st {
     const OSSL_CORE_HANDLE *handle;
@@ -107,6 +99,7 @@ static const OSSL_PARAM fips_param_types[] = {
     OSSL_PARAM_DEFN(OSSL_PROV_PARAM_NAME, OSSL_PARAM_UTF8_PTR, NULL, 0),
     OSSL_PARAM_DEFN(OSSL_PROV_PARAM_VERSION, OSSL_PARAM_UTF8_PTR, NULL, 0),
     OSSL_PARAM_DEFN(OSSL_PROV_PARAM_BUILDINFO, OSSL_PARAM_UTF8_PTR, NULL, 0),
+    OSSL_PARAM_DEFN(OSSL_PROV_PARAM_STATUS, OSSL_PARAM_UNSIGNED_INTEGER, NULL, 0),
     OSSL_PARAM_END
 };
 
@@ -136,87 +129,6 @@ static OSSL_PARAM core_params[] =
     OSSL_PARAM_END
 };
 
-/* TODO(3.0): To be removed */
-static int dummy_evp_call(OPENSSL_CTX *libctx)
-{
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    EVP_MD *sha256 = EVP_MD_fetch(libctx, "SHA256", NULL);
-    EVP_KDF *kdf = EVP_KDF_fetch(libctx, OSSL_KDF_NAME_PBKDF2, NULL);
-    unsigned char dgst[SHA256_DIGEST_LENGTH];
-    unsigned int dgstlen;
-    int ret = 0;
-    BN_CTX *bnctx = NULL;
-    BIGNUM *a = NULL, *b = NULL;
-    unsigned char randbuf[128];
-    RAND_DRBG *drbg = OPENSSL_CTX_get0_public_drbg(libctx);
-#ifndef OPENSSL_NO_EC
-    EC_KEY *key = NULL;
-#endif
-
-    static const char msg[] = "Hello World!";
-    static const unsigned char exptd[] = {
-        0x7f, 0x83, 0xb1, 0x65, 0x7f, 0xf1, 0xfc, 0x53, 0xb9, 0x2d, 0xc1, 0x81,
-        0x48, 0xa1, 0xd6, 0x5d, 0xfc, 0x2d, 0x4b, 0x1f, 0xa3, 0xd6, 0x77, 0x28,
-        0x4a, 0xdd, 0xd2, 0x00, 0x12, 0x6d, 0x90, 0x69
-    };
-
-    if (ctx == NULL || sha256 == NULL || drbg == NULL || kdf == NULL)
-        goto err;
-
-    if (!EVP_DigestInit_ex(ctx, sha256, NULL))
-        goto err;
-    if (!EVP_DigestUpdate(ctx, msg, sizeof(msg) - 1))
-        goto err;
-    if (!EVP_DigestFinal(ctx, dgst, &dgstlen))
-        goto err;
-    if (dgstlen != sizeof(exptd) || memcmp(dgst, exptd, sizeof(exptd)) != 0)
-        goto err;
-
-    bnctx = BN_CTX_new_ex(libctx);
-    if (bnctx == NULL)
-        goto err;
-    BN_CTX_start(bnctx);
-    a = BN_CTX_get(bnctx);
-    b = BN_CTX_get(bnctx);
-    if (b == NULL)
-        goto err;
-    BN_zero(a);
-    if (!BN_one(b)
-        || !BN_add(a, a, b)
-        || BN_cmp(a, b) != 0)
-        goto err;
-
-    if (RAND_DRBG_bytes(drbg, randbuf, sizeof(randbuf)) <= 0)
-        goto err;
-
-    if (!BN_rand_ex(a, 256, BN_RAND_TOP_ANY, BN_RAND_BOTTOM_ANY, bnctx))
-        goto err;
-
-#ifndef OPENSSL_NO_EC
-    /* Do some dummy EC calls */
-    key = EC_KEY_new_by_curve_name_with_libctx(libctx, NULL, NID_X9_62_prime256v1);
-    if (key == NULL)
-        goto err;
-
-    if (!EC_KEY_generate_key(key))
-        goto err;
-#endif
-
-    ret = 1;
- err:
-    BN_CTX_end(bnctx);
-    BN_CTX_free(bnctx);
-
-    EVP_KDF_free(kdf);
-    EVP_MD_CTX_free(ctx);
-    EVP_MD_free(sha256);
-
-#ifndef OPENSSL_NO_EC
-    EC_KEY_free(key);
-#endif
-    return ret;
-}
-
 static const OSSL_PARAM *fips_gettable_params(void *provctx)
 {
     return fips_param_types;
@@ -235,11 +147,31 @@ static int fips_get_params(void *provctx, OSSL_PARAM params[])
     p = OSSL_PARAM_locate(params, OSSL_PROV_PARAM_BUILDINFO);
     if (p != NULL && !OSSL_PARAM_set_utf8_ptr(p, OPENSSL_FULL_VERSION_STR))
         return 0;
-
+    p = OSSL_PARAM_locate(params, OSSL_PROV_PARAM_STATUS);
+    if (p != NULL && !OSSL_PARAM_set_uint(p, FIPS_is_running()))
+        return 0;
     return 1;
 }
 
+static void set_self_test_cb(const OSSL_CORE_HANDLE *handle)
+{
+    if (c_stcbfn != NULL && c_get_libctx != NULL) {
+        c_stcbfn(c_get_libctx(handle), &selftest_params.cb,
+                              &selftest_params.cb_arg);
+    } else {
+        selftest_params.cb = NULL;
+        selftest_params.cb_arg = NULL;
+    }
+}
+
+static int fips_self_test(void *provctx)
+{
+    set_self_test_cb(FIPS_get_core_handle(selftest_params.libctx));
+    return SELF_TEST_post(&selftest_params, 1) ? 1 : 0;
+}
+
 /* FIPS specific version of the function of the same name in provlib.c */
+/* TODO(3.0) - Is this function needed ? */
 const char *ossl_prov_util_nid_to_name(int nid)
 {
     /* We don't have OBJ_nid2n() in FIPS_MODULE so we have an explicit list */
@@ -361,32 +293,32 @@ const char *ossl_prov_util_nid_to_name(int nid)
  */
 static const OSSL_ALGORITHM fips_digests[] = {
     /* Our primary name:NiST name[:our older names] */
-    { "SHA1:SHA-1", "provider=fips,fips=yes", sha1_functions },
-    { "SHA2-224:SHA-224:SHA224", "provider=fips,fips=yes", sha224_functions },
-    { "SHA2-256:SHA-256:SHA256", "provider=fips,fips=yes", sha256_functions },
-    { "SHA2-384:SHA-384:SHA384", "provider=fips,fips=yes", sha384_functions },
-    { "SHA2-512:SHA-512:SHA512", "provider=fips,fips=yes", sha512_functions },
-    { "SHA2-512/224:SHA-512/224:SHA512-224", "provider=fips,fips=yes",
+    { "SHA1:SHA-1:SSL3-SHA1", FIPS_DEFAULT_PROPERTIES, sha1_functions },
+    { "SHA2-224:SHA-224:SHA224", FIPS_DEFAULT_PROPERTIES, sha224_functions },
+    { "SHA2-256:SHA-256:SHA256", FIPS_DEFAULT_PROPERTIES, sha256_functions },
+    { "SHA2-384:SHA-384:SHA384", FIPS_DEFAULT_PROPERTIES, sha384_functions },
+    { "SHA2-512:SHA-512:SHA512", FIPS_DEFAULT_PROPERTIES, sha512_functions },
+    { "SHA2-512/224:SHA-512/224:SHA512-224", FIPS_DEFAULT_PROPERTIES,
       sha512_224_functions },
-    { "SHA2-512/256:SHA-512/256:SHA512-256", "provider=fips,fips=yes",
+    { "SHA2-512/256:SHA-512/256:SHA512-256", FIPS_DEFAULT_PROPERTIES,
       sha512_256_functions },
 
     /* We agree with NIST here, so one name only */
-    { "SHA3-224", "provider=fips,fips=yes", sha3_224_functions },
-    { "SHA3-256", "provider=fips,fips=yes", sha3_256_functions },
-    { "SHA3-384", "provider=fips,fips=yes", sha3_384_functions },
-    { "SHA3-512", "provider=fips,fips=yes", sha3_512_functions },
+    { "SHA3-224", FIPS_DEFAULT_PROPERTIES, sha3_224_functions },
+    { "SHA3-256", FIPS_DEFAULT_PROPERTIES, sha3_256_functions },
+    { "SHA3-384", FIPS_DEFAULT_PROPERTIES, sha3_384_functions },
+    { "SHA3-512", FIPS_DEFAULT_PROPERTIES, sha3_512_functions },
 
-    { "SHAKE-128:SHAKE128", "provider=fips,fips=yes", shake_128_functions },
-    { "SHAKE-256:SHAKE256", "provider=fips,fips=yes", shake_256_functions },
+    { "SHAKE-128:SHAKE128", FIPS_DEFAULT_PROPERTIES, shake_128_functions },
+    { "SHAKE-256:SHAKE256", FIPS_DEFAULT_PROPERTIES, shake_256_functions },
 
     /*
      * KECCAK-KMAC-128 and KECCAK-KMAC-256 as hashes are mostly useful for
      * KMAC128 and KMAC256.
      */
-    { "KECCAK-KMAC-128:KECCAK-KMAC128", "provider=fips,fips=yes",
+    { "KECCAK-KMAC-128:KECCAK-KMAC128", FIPS_DEFAULT_PROPERTIES,
       keccak_kmac_128_functions },
-    { "KECCAK-KMAC-256:KECCAK-KMAC256", "provider=fips,fips=yes",
+    { "KECCAK-KMAC-256:KECCAK-KMAC256", FIPS_DEFAULT_PROPERTIES,
       keccak_kmac_256_functions },
     { NULL, NULL, NULL }
 };
@@ -396,9 +328,9 @@ static const OSSL_ALGORITHM_CAPABLE fips_ciphers[] = {
     ALG("AES-256-ECB", aes256ecb_functions),
     ALG("AES-192-ECB", aes192ecb_functions),
     ALG("AES-128-ECB", aes128ecb_functions),
-    ALG("AES-256-CBC", aes256cbc_functions),
-    ALG("AES-192-CBC", aes192cbc_functions),
-    ALG("AES-128-CBC", aes128cbc_functions),
+    ALG("AES-256-CBC:AES256", aes256cbc_functions),
+    ALG("AES-192-CBC:AES192", aes192cbc_functions),
+    ALG("AES-128-CBC:AES128", aes128cbc_functions),
     ALG("AES-256-CBC-CTS", aes256cbc_cts_functions),
     ALG("AES-192-CBC-CTS", aes192cbc_cts_functions),
     ALG("AES-128-CBC-CTS", aes128cbc_cts_functions),
@@ -452,81 +384,86 @@ static OSSL_ALGORITHM exported_fips_ciphers[OSSL_NELEM(fips_ciphers)];
 
 static const OSSL_ALGORITHM fips_macs[] = {
 #ifndef OPENSSL_NO_CMAC
-    { "CMAC", "provider=fips,fips=yes", cmac_functions },
+    { "CMAC", FIPS_DEFAULT_PROPERTIES, cmac_functions },
 #endif
-    { "GMAC", "provider=fips,fips=yes", gmac_functions },
-    { "HMAC", "provider=fips,fips=yes", hmac_functions },
-    { "KMAC-128:KMAC128", "provider=fips,fips=yes", kmac128_functions },
-    { "KMAC-256:KMAC256", "provider=fips,fips=yes", kmac256_functions },
+    { "GMAC", FIPS_DEFAULT_PROPERTIES, gmac_functions },
+    { "HMAC", FIPS_DEFAULT_PROPERTIES, hmac_functions },
+    { "KMAC-128:KMAC128", FIPS_DEFAULT_PROPERTIES, kmac128_functions },
+    { "KMAC-256:KMAC256", FIPS_DEFAULT_PROPERTIES, kmac256_functions },
     { NULL, NULL, NULL }
 };
 
 static const OSSL_ALGORITHM fips_kdfs[] = {
-    { "HKDF", "provider=fips,fips=yes", kdf_hkdf_functions },
-    { "SSKDF", "provider=fips,fips=yes", kdf_sskdf_functions },
-    { "PBKDF2", "provider=fips,fips=yes", kdf_pbkdf2_functions },
-    { "SSHKDF", "provider=fips,fips=yes", kdf_sshkdf_functions },
-    { "X963KDF", "provider=fips,fips=yes", kdf_x963_kdf_functions },
-    { "TLS1-PRF", "provider=fips,fips=yes", kdf_tls1_prf_functions },
-    { "KBKDF", "provider=fips,fips=yes", kdf_kbkdf_functions },
+    { "HKDF", FIPS_DEFAULT_PROPERTIES, kdf_hkdf_functions },
+    { "SSKDF", FIPS_DEFAULT_PROPERTIES, kdf_sskdf_functions },
+    { "PBKDF2", FIPS_DEFAULT_PROPERTIES, kdf_pbkdf2_functions },
+    { "SSHKDF", FIPS_DEFAULT_PROPERTIES, kdf_sshkdf_functions },
+    { "X963KDF", FIPS_DEFAULT_PROPERTIES, kdf_x963_kdf_functions },
+    { "TLS1-PRF", FIPS_DEFAULT_PROPERTIES, kdf_tls1_prf_functions },
+    { "KBKDF", FIPS_DEFAULT_PROPERTIES, kdf_kbkdf_functions },
     { NULL, NULL, NULL }
 };
 
 static const OSSL_ALGORITHM fips_rands[] = {
-    { "CTR-DRBG", "provider=fips", drbg_ctr_functions },
-    { "HASH-DRBG", "provider=fips", drbg_hash_functions },
-    { "HMAC-DRBG", "provider=fips", drbg_hmac_functions },
-    { "TEST-RAND", "provider=fips", test_rng_functions },
+    { "CTR-DRBG", FIPS_DEFAULT_PROPERTIES, drbg_ctr_functions },
+    { "HASH-DRBG", FIPS_DEFAULT_PROPERTIES, drbg_hash_functions },
+    { "HMAC-DRBG", FIPS_DEFAULT_PROPERTIES, drbg_hmac_functions },
+    { "TEST-RAND", FIPS_UNAPPROVED_PROPERTIES, test_rng_functions },
     { NULL, NULL, NULL }
 };
 
 static const OSSL_ALGORITHM fips_keyexch[] = {
 #ifndef OPENSSL_NO_DH
-    { "DH:dhKeyAgreement", "provider=fips,fips=yes", dh_keyexch_functions },
+    { "DH:dhKeyAgreement", FIPS_DEFAULT_PROPERTIES, dh_keyexch_functions },
 #endif
 #ifndef OPENSSL_NO_EC
-    { "ECDH", "provider=fips,fips=yes", ecdh_keyexch_functions },
-    { "X25519", "provider=fips,fips=no", x25519_keyexch_functions },
-    { "X448", "provider=fips,fips=no", x448_keyexch_functions },
+    { "ECDH", FIPS_DEFAULT_PROPERTIES, ecdh_keyexch_functions },
+    { "X25519", FIPS_DEFAULT_PROPERTIES, x25519_keyexch_functions },
+    { "X448", FIPS_DEFAULT_PROPERTIES, x448_keyexch_functions },
 #endif
+    { "TLS1-PRF", FIPS_DEFAULT_PROPERTIES, kdf_tls1_prf_keyexch_functions },
+    { "HKDF", FIPS_DEFAULT_PROPERTIES, kdf_hkdf_keyexch_functions },
     { NULL, NULL, NULL }
 };
 
 static const OSSL_ALGORITHM fips_signature[] = {
 #ifndef OPENSSL_NO_DSA
-    { "DSA:dsaEncryption", "provider=fips,fips=yes", dsa_signature_functions },
+    { "DSA:dsaEncryption", FIPS_DEFAULT_PROPERTIES, dsa_signature_functions },
 #endif
-    { "RSA:rsaEncryption", "provider=fips,fips=yes", rsa_signature_functions },
+    { "RSA:rsaEncryption", FIPS_DEFAULT_PROPERTIES, rsa_signature_functions },
 #ifndef OPENSSL_NO_EC
-    { "ED25519", "provider=fips,fips=no", ed25519_signature_functions },
-    { "ED448", "provider=fips,fips=no", ed448_signature_functions },
-    { "ECDSA", "provider=fips,fips=yes", ecdsa_signature_functions },
+    { "ED25519", FIPS_DEFAULT_PROPERTIES, ed25519_signature_functions },
+    { "ED448", FIPS_DEFAULT_PROPERTIES, ed448_signature_functions },
+    { "ECDSA", FIPS_DEFAULT_PROPERTIES, ecdsa_signature_functions },
 #endif
     { NULL, NULL, NULL }
 };
 
 static const OSSL_ALGORITHM fips_asym_cipher[] = {
-    { "RSA:rsaEncryption", "provider=fips,fips=yes", rsa_asym_cipher_functions },
+    { "RSA:rsaEncryption", FIPS_DEFAULT_PROPERTIES, rsa_asym_cipher_functions },
     { NULL, NULL, NULL }
 };
 
 static const OSSL_ALGORITHM fips_keymgmt[] = {
 #ifndef OPENSSL_NO_DH
-    { "DH:dhKeyAgreement", "provider=fips,fips=yes", dh_keymgmt_functions },
+    { "DH:dhKeyAgreement", FIPS_DEFAULT_PROPERTIES, dh_keymgmt_functions },
+    { "DHX:X9.42 DH:dhpublicnumber", FIPS_DEFAULT_PROPERTIES, dhx_keymgmt_functions },
 #endif
 #ifndef OPENSSL_NO_DSA
-    { "DSA", "provider=fips,fips=yes", dsa_keymgmt_functions },
+    { "DSA", FIPS_DEFAULT_PROPERTIES, dsa_keymgmt_functions },
 #endif
-    { "RSA:rsaEncryption", "provider=fips,fips=yes", rsa_keymgmt_functions },
-    { "RSA-PSS:RSASSA-PSS", "provider=fips,fips=yes",
+    { "RSA:rsaEncryption", FIPS_DEFAULT_PROPERTIES, rsa_keymgmt_functions },
+    { "RSA-PSS:RSASSA-PSS", FIPS_DEFAULT_PROPERTIES,
       rsapss_keymgmt_functions },
 #ifndef OPENSSL_NO_EC
-    { "EC:id-ecPublicKey", "provider=fips,fips=yes", ec_keymgmt_functions },
-    { "X25519", "provider=fips,fips=no", x25519_keymgmt_functions },
-    { "X448", "provider=fips,fips=no", x448_keymgmt_functions },
-    { "ED25519", "provider=fips,fips=no", ed25519_keymgmt_functions },
-    { "ED448", "provider=fips,fips=no", ed448_keymgmt_functions },
+    { "EC:id-ecPublicKey", FIPS_DEFAULT_PROPERTIES, ec_keymgmt_functions },
+    { "X25519", FIPS_DEFAULT_PROPERTIES, x25519_keymgmt_functions },
+    { "X448", FIPS_DEFAULT_PROPERTIES, x448_keymgmt_functions },
+    { "ED25519", FIPS_DEFAULT_PROPERTIES, ed25519_keymgmt_functions },
+    { "ED448", FIPS_DEFAULT_PROPERTIES, ed448_keymgmt_functions },
 #endif
+    { "TLS1-PRF", FIPS_DEFAULT_PROPERTIES, kdf_keymgmt_functions },
+    { "HKDF", FIPS_DEFAULT_PROPERTIES, kdf_keymgmt_functions },
     { NULL, NULL, NULL }
 };
 
@@ -534,6 +471,10 @@ static const OSSL_ALGORITHM *fips_query(void *provctx, int operation_id,
                                         int *no_cache)
 {
     *no_cache = 0;
+
+    if (!FIPS_is_running())
+        return NULL;
+
     switch (operation_id) {
     case OSSL_OP_DIGEST:
         return fips_digests;
@@ -579,7 +520,9 @@ static const OSSL_DISPATCH fips_dispatch_table[] = {
     { OSSL_FUNC_PROVIDER_GETTABLE_PARAMS, (void (*)(void))fips_gettable_params },
     { OSSL_FUNC_PROVIDER_GET_PARAMS, (void (*)(void))fips_get_params },
     { OSSL_FUNC_PROVIDER_QUERY_OPERATION, (void (*)(void))fips_query },
-    { OSSL_FUNC_PROVIDER_GET_CAPABILITIES, (void (*)(void))provider_get_capabilities },
+    { OSSL_FUNC_PROVIDER_GET_CAPABILITIES,
+      (void (*)(void))provider_get_capabilities },
+    { OSSL_FUNC_PROVIDER_SELF_TEST, (void (*)(void))fips_self_test },
     { 0, NULL }
 };
 
@@ -590,7 +533,6 @@ static const OSSL_DISPATCH intern_dispatch_table[] = {
     { 0, NULL }
 };
 
-
 int OSSL_provider_init(const OSSL_CORE_HANDLE *handle,
                        const OSSL_DISPATCH *in,
                        const OSSL_DISPATCH **out,
@@ -598,8 +540,6 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle,
 {
     FIPS_GLOBAL *fgbl;
     OPENSSL_CTX *libctx = NULL;
-    OSSL_FUNC_self_test_cb_fn *stcbfn = NULL;
-    OSSL_FUNC_core_get_library_context_fn *c_get_libctx = NULL;
 
     for (; in->function_id != 0; in++) {
         switch (in->function_id) {
@@ -682,7 +622,7 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle,
             c_BIO_vsnprintf = OSSL_FUNC_BIO_vsnprintf(in);
             break;
         case OSSL_FUNC_SELF_TEST_CB: {
-            stcbfn = OSSL_FUNC_self_test_cb(in);
+            c_stcbfn = OSSL_FUNC_self_test_cb(in);
             break;
         }
         default:
@@ -691,17 +631,12 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle,
         }
     }
 
-    if (stcbfn != NULL && c_get_libctx != NULL) {
-        stcbfn(c_get_libctx(handle), &selftest_params.cb,
-               &selftest_params.cb_arg);
-    }
-    else {
-        selftest_params.cb = NULL;
-        selftest_params.cb_arg = NULL;
-    }
+    set_self_test_cb(handle);
 
-    if (!c_get_params(handle, core_params))
+    if (!c_get_params(handle, core_params)) {
+        ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_GET_PARAMETER);
         return 0;
+    }
 
     /*  Create a context. */
     if ((*provctx = PROV_CTX_new()) == NULL
@@ -724,18 +659,15 @@ int OSSL_provider_init(const OSSL_CORE_HANDLE *handle,
     fgbl->handle = handle;
 
     selftest_params.libctx = libctx;
-    if (!SELF_TEST_post(&selftest_params, 0))
+    if (!SELF_TEST_post(&selftest_params, 0)) {
+        ERR_raise(ERR_LIB_PROV, PROV_R_SELF_TEST_POST_FAILURE);
         goto err;
+    }
 
-    /*
-     * TODO(3.0): Remove me. This is just a dummy call to demonstrate making
-     * EVP calls from within the FIPS module.
-     */
-    if (!dummy_evp_call(libctx))
-        goto err;
+    /* TODO(3.0): Tests will hang if this is removed */
+    (void)RAND_get0_public(libctx);
 
     *out = fips_dispatch_table;
-
     return 1;
  err:
     fips_teardown(*provctx);
@@ -756,29 +688,31 @@ int fips_intern_provider_init(const OSSL_CORE_HANDLE *handle,
                               const OSSL_DISPATCH **out,
                               void **provctx)
 {
-    OSSL_FUNC_core_get_library_context_fn *c_get_libctx = NULL;
+    OSSL_FUNC_core_get_library_context_fn *c_internal_get_libctx = NULL;
 
     for (; in->function_id != 0; in++) {
         switch (in->function_id) {
         case OSSL_FUNC_CORE_GET_LIBRARY_CONTEXT:
-            c_get_libctx = OSSL_FUNC_core_get_library_context(in);
+            c_internal_get_libctx = OSSL_FUNC_core_get_library_context(in);
             break;
         default:
             break;
         }
     }
 
-    if (c_get_libctx == NULL)
+    if (c_internal_get_libctx == NULL)
         return 0;
 
     if ((*provctx = PROV_CTX_new()) == NULL)
         return 0;
+
     /*
      * Using the parent library context only works because we are a built-in
      * internal provider. This is not something that most providers would be
      * able to do.
      */
-    PROV_CTX_set0_library_context(*provctx, (OPENSSL_CTX *)c_get_libctx(handle));
+    PROV_CTX_set0_library_context(*provctx,
+                                  (OPENSSL_CTX *)c_internal_get_libctx(handle));
     PROV_CTX_set0_handle(*provctx, handle);
 
     *out = intern_dispatch_table;

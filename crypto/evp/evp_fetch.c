@@ -17,6 +17,7 @@
 #include "internal/core.h"
 #include "internal/provider.h"
 #include "internal/namemap.h"
+#include "internal/property.h"
 #include "crypto/evp.h"    /* evp_local.h needs it */
 #include "evp_local.h"
 
@@ -368,24 +369,34 @@ void *evp_generic_fetch_by_number(OPENSSL_CTX *libctx, int operation_id,
     return ret;
 }
 
-static int evp_set_default_properties(OPENSSL_CTX *libctx,
-                                      OSSL_PROPERTY_LIST *def_prop)
+void evp_method_store_flush(OPENSSL_CTX *libctx)
 {
     OSSL_METHOD_STORE *store = get_evp_method_store(libctx);
-    OSSL_PROPERTY_LIST **plp = ossl_ctx_global_properties(libctx);
+
+    if (store != NULL)
+        ossl_method_store_flush_cache(store, 1);
+}
+
+static int evp_set_parsed_default_properties(OPENSSL_CTX *libctx,
+                                             OSSL_PROPERTY_LIST *def_prop,
+                                             int loadconfig)
+{
+    OSSL_METHOD_STORE *store = get_evp_method_store(libctx);
+    OSSL_PROPERTY_LIST **plp = ossl_ctx_global_properties(libctx, loadconfig);
 
     if (plp != NULL) {
         ossl_property_free(*plp);
         *plp = def_prop;
         if (store != NULL)
-            ossl_method_store_flush_cache(store);
+            ossl_method_store_flush_cache(store, 0);
         return 1;
     }
     EVPerr(0, ERR_R_INTERNAL_ERROR);
     return 0;
 }
 
-int EVP_set_default_properties(OPENSSL_CTX *libctx, const char *propq)
+int evp_set_default_properties_int(OPENSSL_CTX *libctx, const char *propq,
+                                   int loadconfig)
 {
     OSSL_PROPERTY_LIST *pl = NULL;
 
@@ -393,13 +404,17 @@ int EVP_set_default_properties(OPENSSL_CTX *libctx, const char *propq)
         EVPerr(0, EVP_R_DEFAULT_QUERY_PARSE_ERROR);
         return 0;
     }
-    return evp_set_default_properties(libctx, pl);
+    return evp_set_parsed_default_properties(libctx, pl, loadconfig);
 }
 
+int EVP_set_default_properties(OPENSSL_CTX *libctx, const char *propq)
+{
+    return evp_set_default_properties_int(libctx, propq, 1);
+}
 
 static int evp_default_properties_merge(OPENSSL_CTX *libctx, const char *propq)
 {
-    OSSL_PROPERTY_LIST **plp = ossl_ctx_global_properties(libctx);
+    OSSL_PROPERTY_LIST **plp = ossl_ctx_global_properties(libctx, 1);
     OSSL_PROPERTY_LIST *pl1, *pl2;
 
     if (propq == NULL)
@@ -416,13 +431,13 @@ static int evp_default_properties_merge(OPENSSL_CTX *libctx, const char *propq)
         EVPerr(0, ERR_R_MALLOC_FAILURE);
         return 0;
     }
-    return evp_set_default_properties(libctx, pl2);
+    return evp_set_parsed_default_properties(libctx, pl2, 0);
 }
 
 static int evp_default_property_is_enabled(OPENSSL_CTX *libctx,
                                            const char *prop_name)
 {
-    OSSL_PROPERTY_LIST **plp = ossl_ctx_global_properties(libctx);
+    OSSL_PROPERTY_LIST **plp = ossl_ctx_global_properties(libctx, 1);
 
     return plp != NULL && ossl_property_is_enabled(libctx, prop_name, *plp);
 }

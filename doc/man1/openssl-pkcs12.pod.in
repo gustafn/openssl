@@ -36,6 +36,7 @@ B<openssl> B<pkcs12>
 [B<-camellia128>]
 [B<-camellia192>]
 [B<-camellia256>]
+[B<-noenc>]
 [B<-nodes>]
 [B<-iter> I<count>]
 [B<-noiter>]
@@ -43,6 +44,7 @@ B<openssl> B<pkcs12>
 [B<-maciter>]
 [B<-nomac>]
 [B<-twopass>]
+[B<-legacy>]
 [B<-descert>]
 [B<-certpbe> I<cipher>]
 [B<-keypbe> I<cipher>]
@@ -146,9 +148,13 @@ Use ARIA to encrypt private keys before outputting.
 
 Use Camellia to encrypt private keys before outputting.
 
-=item B<-nodes>
+=item B<-noenc>
 
 Don't encrypt the private keys at all.
+
+=item B<-nodes>
+
+This option is deprecated since OpenSSL 3.0; use B<-noenc> instead.
 
 =item B<-nomacver>
 
@@ -160,6 +166,16 @@ Prompt for separate integrity and encryption passwords: most software
 always assumes these are the same so this option will render such
 PKCS#12 files unreadable. Cannot be used in combination with the options
 B<-password>, B<-passin> if importing, or B<-passout> if exporting.
+
+=item B<-legacy>
+
+Use legacy mode of operation and automatically load the legacy provider.
+In the legacy mode, the default algorithm for certificate encryption
+is RC2_CBC or 3DES_CBC depending on whether the RC2 cipher is enabled
+in the build. The default algorithm for private key encryption is 3DES_CBC.
+If the legacy option is not specified, then the legacy provider is not loaded
+and the default encryption algorithm for both certificates and private keys is
+AES_256_CBC with PBKDF2 for key derivation by default.
 
 =back
 
@@ -224,8 +240,9 @@ for this search. If the search fails it is considered a fatal error.
 
 Encrypt the certificate using triple DES, this may render the PKCS#12
 file unreadable by some "export grade" software. By default the private
-key is encrypted using triple DES and the certificate using 40 bit RC2
-unless RC2 is disabled in which case triple DES is used.
+key is encrypted using AES and the certificate using triple DES unless
+the '-legacy' option is used. If '-descert' is used with the '-legacy'
+then both, the private key and the certificate are encrypted using triple DES.
 
 =item B<-keypbe> I<alg>, B<-certpbe> I<alg>
 
@@ -344,11 +361,15 @@ Output only client certificates to a file:
 
 Don't encrypt the private key:
 
- openssl pkcs12 -in file.p12 -out file.pem -nodes
+ openssl pkcs12 -in file.p12 -out file.pem -noenc
 
 Print some info about a PKCS#12 file:
 
  openssl pkcs12 -in file.p12 -info -noout
+
+Print some info about a PKCS#12 file in legacy mode:
+
+ openssl pkcs12 -in file.p12 -info -noout -legacy
 
 Create a PKCS#12 file:
 
@@ -359,11 +380,20 @@ Include some extra certificates:
  openssl pkcs12 -export -in file.pem -out file.p12 -name "My Certificate" \
   -certfile othercerts.pem
 
+Export a PKCS#12 file with default encryption algorithms as in the legacy provider:
+
+ openssl pkcs12 -export -in cert.pem -inkey key.pem -out file.p12 -legacy
+
 =head1 SEE ALSO
 
 L<openssl(1)>,
 L<openssl-pkcs8(1)>,
 L<ossl_store-file(7)>
+
+=head1 HISTORY
+
+The B<-engine> option was deprecated in OpenSSL 3.0.
+The <-nodes> option was deprecated in OpenSSL 3.0, too; use B<-noenc> instead.
 
 =head1 COPYRIGHT
 

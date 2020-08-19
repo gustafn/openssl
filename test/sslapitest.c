@@ -799,11 +799,14 @@ static int execute_test_large_message(const SSL_METHOD *smeth,
 
     if (!TEST_ptr(certbio = BIO_new_file(cert, "r")))
         goto end;
-    chaincert = PEM_read_bio_X509(certbio, NULL, NULL, NULL);
+
+    if (!TEST_ptr(chaincert = X509_new_with_libctx(libctx, NULL)))
+        goto end;
+
+    if (PEM_read_bio_X509(certbio, &chaincert, NULL, NULL) == NULL)
+        goto end;
     BIO_free(certbio);
     certbio = NULL;
-    if (!TEST_ptr(chaincert))
-        goto end;
 
     if (!TEST_true(create_ssl_ctx_pair(libctx, smeth, cmeth, min_version,
                                        max_version, &sctx, &cctx, cert,
@@ -852,6 +855,7 @@ static int execute_test_large_message(const SSL_METHOD *smeth,
 
     testresult = 1;
  end:
+    BIO_free(certbio);
     X509_free(chaincert);
     SSL_free(serverssl);
     SSL_free(clientssl);
@@ -1849,8 +1853,8 @@ static int test_tlsext_status_type(void)
     if (!TEST_ptr(certbio = BIO_new_file(cert, "r"))
             || !TEST_ptr(id = OCSP_RESPID_new())
             || !TEST_ptr(ids = sk_OCSP_RESPID_new_null())
-            || !TEST_ptr(ocspcert = PEM_read_bio_X509(certbio,
-                                                      NULL, NULL, NULL))
+            || !TEST_ptr(ocspcert = X509_new_with_libctx(libctx, NULL))
+            || !TEST_ptr(PEM_read_bio_X509(certbio, &ocspcert, NULL, NULL))
             || !TEST_true(OCSP_RESPID_set_by_key_ex(id, ocspcert, libctx, NULL))
             || !TEST_true(sk_OCSP_RESPID_push(ids, id)))
         goto end;
@@ -5686,9 +5690,20 @@ static int test_export_key_mat(int tst)
         goto end;
 
     if (!TEST_true(create_ssl_objects(sctx, cctx, &serverssl, &clientssl, NULL,
-                                      NULL))
-            || !TEST_true(create_ssl_connection(serverssl, clientssl,
-                                                SSL_ERROR_NONE)))
+                                      NULL)))
+        goto end;
+
+    /*
+     * Premature call of SSL_export_keying_material should just fail.
+     */
+    if (!TEST_int_le(SSL_export_keying_material(clientssl, ckeymat1,
+                                                sizeof(ckeymat1), label,
+                                                SMALL_LABEL_LEN + 1, context,
+                                                sizeof(context) - 1, 1), 0))
+        goto end;
+
+    if (!TEST_true(create_ssl_connection(serverssl, clientssl,
+                                         SSL_ERROR_NONE)))
         goto end;
 
     if (tst == 5) {
@@ -7044,7 +7059,7 @@ static int tick_key_evp_cb(SSL *s, unsigned char key_name[16],
     params[2] = OSSL_PARAM_construct_end();
     if (aes128cbc == NULL
             || !EVP_CipherInit_ex(ctx, aes128cbc, NULL, tick_aes_key, iv, enc)
-            || !EVP_MAC_set_ctx_params(hctx, params)
+            || !EVP_MAC_CTX_set_params(hctx, params)
             || !EVP_MAC_init(hctx))
         ret = -1;
     else
@@ -7482,14 +7497,16 @@ static int cert_cb(SSL *s, void *arg)
             goto out;
         if (!TEST_ptr(in = BIO_new(BIO_s_file()))
                 || !TEST_int_ge(BIO_read_filename(in, rootfile), 0)
-                || !TEST_ptr(rootx = PEM_read_bio_X509(in, NULL, NULL, NULL))
+                || !TEST_ptr(rootx = X509_new_with_libctx(libctx, NULL))
+                || !TEST_ptr(PEM_read_bio_X509(in, &rootx, NULL, NULL))
                 || !TEST_true(sk_X509_push(chain, rootx)))
             goto out;
         rootx = NULL;
         BIO_free(in);
         if (!TEST_ptr(in = BIO_new(BIO_s_file()))
                 || !TEST_int_ge(BIO_read_filename(in, ecdsacert), 0)
-                || !TEST_ptr(x509 = PEM_read_bio_X509(in, NULL, NULL, NULL)))
+                || !TEST_ptr(x509 = X509_new_with_libctx(libctx, NULL))
+                || !TEST_ptr(PEM_read_bio_X509(in, &x509, NULL, NULL)))
             goto out;
         BIO_free(in);
         if (!TEST_ptr(in = BIO_new(BIO_s_file()))
@@ -7623,42 +7640,37 @@ static int test_cert_cb(int tst)
 
 static int client_cert_cb(SSL *ssl, X509 **x509, EVP_PKEY **pkey)
 {
-    X509 *xcert, *peer;
+    X509 *xcert;
     EVP_PKEY *privpkey;
     BIO *in = NULL;
+    BIO *priv_in = NULL;
 
-    /* Check that SSL_get_peer_certificate() returns something sensible */
-    peer = SSL_get_peer_certificate(ssl);
-    if (!TEST_ptr(peer))
+    /* Check that SSL_get0_peer_certificate() returns something sensible */
+    if (!TEST_ptr(SSL_get0_peer_certificate(ssl)))
         return 0;
-    X509_free(peer);
 
     in = BIO_new_file(cert, "r");
     if (!TEST_ptr(in))
         return 0;
 
-    xcert = PEM_read_bio_X509(in, NULL, NULL, NULL);
-    BIO_free(in);
-    if (!TEST_ptr(xcert))
-        return 0;
-
-    in = BIO_new_file(privkey, "r");
-    if (!TEST_ptr(in)) {
-        X509_free(xcert);
-        return 0;
-    }
-
-    privpkey = PEM_read_bio_PrivateKey(in, NULL, NULL, NULL);
-    BIO_free(in);
-    if (!TEST_ptr(privpkey)) {
-        X509_free(xcert);
-        return 0;
-    }
+    if (!TEST_ptr(xcert = X509_new_with_libctx(libctx, NULL))
+            || !TEST_ptr(PEM_read_bio_X509(in, &xcert, NULL, NULL))
+            || !TEST_ptr(priv_in = BIO_new_file(privkey, "r"))
+            || !TEST_ptr(privpkey = PEM_read_bio_PrivateKey(priv_in, NULL, NULL,
+                                                            NULL)))
+        goto err;
 
     *x509 = xcert;
     *pkey = privpkey;
 
+    BIO_free(in);
+    BIO_free(priv_in);
     return 1;
+err:
+    X509_free(xcert);
+    BIO_free(in);
+    BIO_free(priv_in);
+    return 0;
 }
 
 static int verify_cb(int preverify_ok, X509_STORE_CTX *x509_ctx)

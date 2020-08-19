@@ -343,12 +343,11 @@ void *X509_CRL_get_meth_data(X509_CRL *crl);
 
 const char *X509_verify_cert_error_string(long n);
 
-int X509_verify_ex(X509 *a, EVP_PKEY *r, OPENSSL_CTX *libctx, const char *propq);
 int X509_verify(X509 *a, EVP_PKEY *r);
 int X509_self_signed(X509 *cert, int verify_signature);
 
-int X509_REQ_verify_ex(X509_REQ *a, EVP_PKEY *r, OPENSSL_CTX *libctx,
-                       const char *propq);
+int X509_REQ_verify_with_libctx(X509_REQ *a, EVP_PKEY *r, OPENSSL_CTX *libctx,
+                                const char *propq);
 int X509_REQ_verify(X509_REQ *a, EVP_PKEY *r);
 int X509_CRL_verify(X509_CRL *a, EVP_PKEY *r);
 int NETSCAPE_SPKI_verify(NETSCAPE_SPKI *a, EVP_PKEY *r);
@@ -384,12 +383,10 @@ int X509_REQ_digest(const X509_REQ *data, const EVP_MD *type,
 int X509_NAME_digest(const X509_NAME *data, const EVP_MD *type,
                      unsigned char *md, unsigned int *len);
 
-# if !defined(OPENSSL_NO_SOCK)
 X509 *X509_load_http(const char *url, BIO *bio, BIO *rbio, int timeout);
-#  define X509_http_nbio(url) X509_load_http(url, NULL, NULL, 0)
+# define X509_http_nbio(url) X509_load_http(url, NULL, NULL, 0)
 X509_CRL *X509_CRL_load_http(const char *url, BIO *bio, BIO *rbio, int timeout);
-#  define X509_CRL_http_nbio(url) X509_CRL_load_http(url, NULL,  NULL, 0)
-# endif
+# define X509_CRL_http_nbio(url) X509_CRL_load_http(url, NULL,  NULL, 0)
 
 # ifndef OPENSSL_NO_STDIO
 X509 *d2i_X509_fp(FILE *fp, X509 **x509);
@@ -558,6 +555,7 @@ int X509_NAME_set(X509_NAME **xn, const X509_NAME *name);
 
 DECLARE_ASN1_FUNCTIONS(X509_CINF)
 DECLARE_ASN1_FUNCTIONS(X509)
+X509 *X509_new_with_libctx(OPENSSL_CTX *libctx, const char *propq);
 DECLARE_ASN1_FUNCTIONS(X509_CERT_AUX)
 
 #define X509_get_ex_new_index(l, p, newf, dupf, freef) \
@@ -786,6 +784,14 @@ unsigned long X509_subject_name_hash(X509 *x);
 unsigned long X509_issuer_name_hash_old(X509 *a);
 unsigned long X509_subject_name_hash_old(X509 *x);
 # endif
+
+# define X509_ADD_FLAG_DEFAULT  0
+# define X509_ADD_FLAG_UP_REF   0x1
+# define X509_ADD_FLAG_PREPEND  0x2
+# define X509_ADD_FLAG_NO_DUP   0x4
+# define X509_ADD_FLAG_NO_SS    0x8
+int X509_add_cert(STACK_OF(X509) *sk, X509 *cert, int flags);
+int X509_add_certs(STACK_OF(X509) *sk, STACK_OF(X509) *certs, int flags);
 
 int X509_cmp(const X509 *a, const X509 *b);
 int X509_NAME_cmp(const X509_NAME *a, const X509_NAME *b);

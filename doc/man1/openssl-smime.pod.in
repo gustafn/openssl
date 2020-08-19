@@ -50,6 +50,7 @@ B<openssl> B<smime>
 {- $OpenSSL::safe::opt_r_synopsis -}
 {- $OpenSSL::safe::opt_v_synopsis -}
 {- $OpenSSL::safe::opt_provider_synopsis -}
+{- $OpenSSL::safe::opt_config_synopsis -}
 I<recipcert> ...
 
 =for openssl ifdef engine
@@ -292,6 +293,8 @@ Any verification errors cause the command to exit.
 
 {- $OpenSSL::safe::opt_provider_item -}
 
+{- $OpenSSL::safe::opt_config_item -}
+
 =item I<recipcert> ...
 
 One or more certificates of message recipients, used when encrypting
@@ -482,6 +485,8 @@ The -no_alt_chains option was added in OpenSSL 1.1.0.
 
 All B<-keyform> values except B<ENGINE> have become obsolete in OpenSSL 3.0.0
 and have no effect.
+
+The B<-engine> option was deprecated in OpenSSL 3.0.
 
 =head1 COPYRIGHT
 

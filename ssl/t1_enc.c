@@ -49,7 +49,7 @@ static int tls1_PRF(SSL *s,
     kdf = EVP_KDF_fetch(s->ctx->libctx, OSSL_KDF_NAME_TLS1_PRF, s->ctx->propq);
     if (kdf == NULL)
         goto err;
-    kctx = EVP_KDF_new_ctx(kdf);
+    kctx = EVP_KDF_CTX_new(kdf);
     EVP_KDF_free(kdf);
     if (kctx == NULL)
         goto err;
@@ -70,9 +70,9 @@ static int tls1_PRF(SSL *s,
     *p++ = OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SEED,
                                              (void *)seed5, (size_t)seed5_len);
     *p = OSSL_PARAM_construct_end();
-    if (EVP_KDF_set_ctx_params(kctx, params)
+    if (EVP_KDF_CTX_set_params(kctx, params)
             && EVP_KDF_derive(kctx, out, olen)) {
-        EVP_KDF_free_ctx(kctx);
+        EVP_KDF_CTX_free(kctx);
         return 1;
     }
 
@@ -82,7 +82,7 @@ static int tls1_PRF(SSL *s,
                  ERR_R_INTERNAL_ERROR);
     else
         SSLerr(SSL_F_TLS1_PRF, ERR_R_INTERNAL_ERROR);
-    EVP_KDF_free_ctx(kctx);
+    EVP_KDF_CTX_free(kctx);
     return 0;
 }
 
@@ -380,9 +380,9 @@ int tls1_change_cipher_state(SSL *s, int which)
         mac_key = EVP_PKEY_new_mac_key(mac_type, NULL, mac_secret,
                                                (int)*mac_secret_size);
         if (mac_key == NULL
-            || EVP_DigestSignInit_ex(mac_ctx, NULL,
-                                     EVP_MD_name(m), s->ctx->propq,
-                                     mac_key, s->ctx->libctx) <= 0) {
+            || EVP_DigestSignInit_with_libctx(mac_ctx, NULL, EVP_MD_name(m),
+                                              s->ctx->libctx, s->ctx->propq,
+                                              mac_key) <= 0) {
             EVP_PKEY_free(mac_key);
             SSLfatal(s, SSL_AD_INTERNAL_ERROR, SSL_F_TLS1_CHANGE_CIPHER_STATE,
                      ERR_R_INTERNAL_ERROR);

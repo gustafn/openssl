@@ -34,6 +34,7 @@ static OSSL_FUNC_keymgmt_gen_set_params_fn dsa_gen_set_params;
 static OSSL_FUNC_keymgmt_gen_settable_params_fn dsa_gen_settable_params;
 static OSSL_FUNC_keymgmt_gen_fn dsa_gen;
 static OSSL_FUNC_keymgmt_gen_cleanup_fn dsa_gen_cleanup;
+static OSSL_FUNC_keymgmt_load_fn dsa_load;
 static OSSL_FUNC_keymgmt_get_params_fn dsa_get_params;
 static OSSL_FUNC_keymgmt_gettable_params_fn dsa_gettable_params;
 static OSSL_FUNC_keymgmt_has_fn dsa_has;
@@ -294,7 +295,7 @@ static const OSSL_PARAM dsa_params[] = {
     OSSL_PARAM_END
 };
 
-static const OSSL_PARAM *dsa_gettable_params(void)
+static const OSSL_PARAM *dsa_gettable_params(void *provctx)
 {
     return dsa_params;
 }
@@ -528,6 +529,8 @@ static void *dsa_gen(void *genctx, OSSL_CALLBACK *osslcb, void *cbarg)
                                          gencb) <= 0)
              goto end;
     }
+    ffc_params_enable_flags(ffc, FFC_PARAM_FLAG_VALIDATE_LEGACY,
+                            gctx->gen_type == DSA_PARAMGEN_TYPE_FIPS_186_2);
     if ((gctx->selection & OSSL_KEYMGMT_SELECT_KEYPAIR) != 0) {
         if (ffc->p == NULL
             || ffc->q == NULL
@@ -557,6 +560,20 @@ static void dsa_gen_cleanup(void *genctx)
     OPENSSL_free(gctx);
 }
 
+void *dsa_load(const void *reference, size_t reference_sz)
+{
+    DSA *dsa = NULL;
+
+    if (reference_sz == sizeof(dsa)) {
+        /* The contents of the reference is the address to our object */
+        dsa = *(DSA **)reference;
+        /* We grabbed, so we detach it */
+        *(DSA **)reference = NULL;
+        return dsa;
+    }
+    return NULL;
+}
+
 const OSSL_DISPATCH dsa_keymgmt_functions[] = {
     { OSSL_FUNC_KEYMGMT_NEW, (void (*)(void))dsa_newdata },
     { OSSL_FUNC_KEYMGMT_GEN_INIT, (void (*)(void))dsa_gen_init },
@@ -566,6 +583,7 @@ const OSSL_DISPATCH dsa_keymgmt_functions[] = {
       (void (*)(void))dsa_gen_settable_params },
     { OSSL_FUNC_KEYMGMT_GEN, (void (*)(void))dsa_gen },
     { OSSL_FUNC_KEYMGMT_GEN_CLEANUP, (void (*)(void))dsa_gen_cleanup },
+    { OSSL_FUNC_KEYMGMT_LOAD, (void (*)(void))dsa_load },
     { OSSL_FUNC_KEYMGMT_FREE, (void (*)(void))dsa_freedata },
     { OSSL_FUNC_KEYMGMT_GET_PARAMS, (void (*) (void))dsa_get_params },
     { OSSL_FUNC_KEYMGMT_GETTABLE_PARAMS, (void (*) (void))dsa_gettable_params },

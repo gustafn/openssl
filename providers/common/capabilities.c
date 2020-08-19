@@ -17,6 +17,7 @@
 #include "internal/nelem.h"
 #include "internal/tlsgroups.h"
 #include "prov/providercommon.h"
+#include "e_os.h"
 
 typedef struct tls_group_constants_st {
     unsigned int group_id;   /* Group ID */
@@ -164,7 +165,10 @@ static int tls_group_capability(OSSL_CALLBACK *cb, void *arg)
 {
     size_t i;
 
-#if !defined(OPENSSL_NO_EC) && !defined(OPENSSL_NO_DH) && !defined(FIPS_MODULE)
+#if !defined(OPENSSL_NO_EC) \
+    && !defined(OPENSSL_NO_EC2M) \
+    && !defined(OPENSSL_NO_DH) \
+    && !defined(FIPS_MODULE)
     assert(OSSL_NELEM(param_group_list) == OSSL_NELEM(group_list));
 #endif
     for (i = 0; i < OSSL_NELEM(param_group_list); i++)
@@ -177,7 +181,7 @@ static int tls_group_capability(OSSL_CALLBACK *cb, void *arg)
 int provider_get_capabilities(void *provctx, const char *capability,
                               OSSL_CALLBACK *cb, void *arg)
 {
-    if (strcmp(capability, "TLS-GROUP") == 0)
+    if (strcasecmp(capability, "TLS-GROUP") == 0)
         return tls_group_capability(cb, arg);
 
     /* We don't support this capability */

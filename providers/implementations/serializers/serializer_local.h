@@ -35,10 +35,14 @@ struct pkcs8_encrypt_ctx_st {
 OSSL_FUNC_keymgmt_new_fn *ossl_prov_get_keymgmt_new(const OSSL_DISPATCH *fns);
 OSSL_FUNC_keymgmt_free_fn *ossl_prov_get_keymgmt_free(const OSSL_DISPATCH *fns);
 OSSL_FUNC_keymgmt_import_fn *ossl_prov_get_keymgmt_import(const OSSL_DISPATCH *fns);
+OSSL_FUNC_keymgmt_export_fn *ossl_prov_get_keymgmt_export(const OSSL_DISPATCH *fns);
 
 OSSL_FUNC_keymgmt_new_fn *ossl_prov_get_keymgmt_rsa_new(void);
+OSSL_FUNC_keymgmt_new_fn *ossl_prov_get_keymgmt_rsapss_new(void);
 OSSL_FUNC_keymgmt_free_fn *ossl_prov_get_keymgmt_rsa_free(void);
 OSSL_FUNC_keymgmt_import_fn *ossl_prov_get_keymgmt_rsa_import(void);
+OSSL_FUNC_keymgmt_export_fn *ossl_prov_get_keymgmt_rsa_export(void);
+OSSL_FUNC_keymgmt_export_fn *ossl_prov_get_keymgmt_rsapss_export(void);
 OSSL_FUNC_keymgmt_new_fn *ossl_prov_get_keymgmt_dh_new(void);
 OSSL_FUNC_keymgmt_free_fn *ossl_prov_get_keymgmt_dh_free(void);
 OSSL_FUNC_keymgmt_import_fn *ossl_prov_get_keymgmt_dh_import(void);
@@ -60,6 +64,7 @@ int ossl_prov_prepare_dh_params(const void *dh, int nid,
                                 void **pstr, int *pstrtype);
 int ossl_prov_dh_pub_to_der(const void *dh, unsigned char **pder);
 int ossl_prov_dh_priv_to_der(const void *dh, unsigned char **pder);
+int ossl_prov_dh_type_to_evp(const DH *dh);
 
 #ifndef OPENSSL_NO_EC
 void ecx_get_new_free_import(ECX_KEY_TYPE type,
@@ -157,3 +162,22 @@ int ossl_prov_write_pub_pem_from_obj(BIO *out, const void *obj, int obj_nid,
                                                 int *strtype),
                                      int (*k2d)(const void *obj,
                                                 unsigned char **pder));
+
+int ossl_prov_read_der(PROV_CTX *provctx, OSSL_CORE_BIO *cin,
+                       unsigned char **data, long *len);
+int ossl_prov_read_pem(PROV_CTX *provctx, OSSL_CORE_BIO *cin,
+                       char **pem_name, char **pem_header,
+                       unsigned char **data, long *len);
+#ifndef OPENSSL_NO_DSA
+EVP_PKEY *ossl_prov_read_msblob(PROV_CTX *provctx, OSSL_CORE_BIO *cin,
+                                int *ispub);
+# ifndef OPENSSL_NO_RC4
+EVP_PKEY *ossl_prov_read_pvk(PROV_CTX *provctx, OSSL_CORE_BIO *cin,
+                             OSSL_PASSPHRASE_CALLBACK *pw_cb, void *pw_cbarg);
+# endif
+#endif
+
+int ossl_prov_der_from_p8(unsigned char **new_der, long *new_der_len,
+                          unsigned char *input_der, long input_der_len,
+                          OSSL_PASSPHRASE_CALLBACK *pw_cb, void *pw_cbarg);
+

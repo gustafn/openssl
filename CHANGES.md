@@ -23,6 +23,58 @@ OpenSSL 3.0
 
 ### Changes between 1.1.1 and 3.0 [xx XXX xxxx]
 
+ * Remove the RAND_DRBG API
+
+   The RAND_DRBG API did not fit well into the new provider concept as
+   implemented by EVP_RAND and EVP_RAND_CTX. The main reason is that the
+   RAND_DRBG API is a mixture of 'front end' and 'back end' API calls
+   and some of its API calls are rather low-level. This holds in particular
+   for the callback mechanism (RAND_DRBG_set_callbacks()).
+
+   Adding a compatibility layer to continue supporting the RAND_DRBG API as
+   a legacy API for a regular deprecation period turned out to come at the
+   price of complicating the new provider API unnecessarily. Since the
+   RAND_DRBG API exists only since version 1.1.1, it was decided by the OMC
+   to drop it entirely.
+
+   *Paul Dale and Matthias St. Pierre*
+
+ * Allow SSL_set1_host() and SSL_add1_host() to take IP literal addresses
+   as well as actual hostnames.
+
+   *David Woodhouse*
+
+ * The 'MinProtocol' and 'MaxProtocol' configuration commands now silently
+   ignore TLS protocol version bounds when configuring DTLS-based contexts, and
+   conversely, silently ignore DTLS protocol version bounds when configuring
+   TLS-based contexts.  The commands can be repeated to set bounds of both
+   types.  The same applies with the corresponding "min_protocol" and
+   "max_protocol" command-line switches, in case some application uses both TLS
+   and DTLS.
+
+   SSL_CTX instances that are created for a fixed protocol version (e.g.
+   TLSv1_server_method()) also silently ignore version bounds.  Previously
+   attempts to apply bounds to these protocol versions would result in an
+   error.  Now only the "version-flexible" SSL_CTX instances are subject to
+   limits in configuration files in command-line options.
+
+   *Viktor Dukhovni*
+
+ * Deprecated the `ENGINE` API.  Engines should be replaced with providers
+   going forward.
+
+   *Paul Dale*
+
+ * Reworked the recorded ERR codes to make better space for system errors.
+   To distinguish them, the macro `ERR_SYSTEM_ERROR()` indicates if the
+   given code is a system error (true) or an OpenSSL error (false).
+
+   *Richard Levitte*
+
+ * Reworked the test perl framework to better allow parallel testing.
+
+   *Nicola Tuveri and David von Oheimb*
+
  * Added ciphertext stealing algorithms AES-128-CBC-CTS, AES-192-CBC-CTS and
    AES-256-CBC-CTS to the providers. CS1, CS2 and CS3 variants are supported.
 
@@ -225,6 +277,13 @@ OpenSSL 3.0
 
    *David von Oheimb*
 
+ * Added `util/check-format.pl`, a tool for checking adherence to the
+   OpenSSL coding style <https://www.openssl.org/policies/codingstyle.html>.
+   The checks performed are incomplete and yield some false positives.
+   Still the tool should be useful for detecting most typical glitches.
+
+   *David von Oheimb*
+
  * BIO_do_connect and BIO_do_handshake have been extended:
    If domain name resolution yields multiple IP addresses all of them are tried
    after connect() failures.
@@ -409,8 +468,8 @@ OpenSSL 3.0
    and HMAC_CTX_get_md.
 
    Use of these low level functions has been informally discouraged for a long
-   time.  Instead applications should use L<EVP_MAC_new_ctx(3)>,
-   L<EVP_MAC_free_ctx(3)>, L<EVP_MAC_init(3)>, L<EVP_MAC_update(3)>
+   time.  Instead applications should use L<EVP_MAC_CTX_new(3)>,
+   L<EVP_MAC_CTX_free(3)>, L<EVP_MAC_init(3)>, L<EVP_MAC_update(3)>
    and L<EVP_MAC_final(3)>.
 
    *Paul Dale*
@@ -433,8 +492,8 @@ OpenSSL 3.0
    CMAC_CTX_copy, CMAC_Init, CMAC_Update, CMAC_Final and CMAC_resume.
 
    Use of these low level functions has been informally discouraged for a long
-   time.  Instead applications should use L<EVP_MAC_new_ctx(3)>,
-   L<EVP_MAC_free_ctx(3)>, L<EVP_MAC_init(3)>, L<EVP_MAC_update(3)>
+   time.  Instead applications should use L<EVP_MAC_CTX_new(3)>,
+   L<EVP_MAC_CTX_free(3)>, L<EVP_MAC_init(3)>, L<EVP_MAC_update(3)>
    and L<EVP_MAC_final(3)>.
 
    *Paul Dale*
@@ -1112,6 +1171,11 @@ OpenSSL 3.0
    (e.g.: data received by SSL_read(3)).
 
    *Martin Elshuber*
+
+ * `PKCS12_parse` now maintains the order of the parsed certificates
+   when outputting them via `*ca` (rather than reversing it).
+
+   *David von Oheimb*
 
 OpenSSL 1.1.1
 -------------

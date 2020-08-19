@@ -16,7 +16,6 @@
 #include "crypto/evp.h"
 #include "evp_local.h"
 
-
 static void *keymgmt_new(void)
 {
     EVP_KEYMGMT *keymgmt = NULL;
@@ -88,6 +87,10 @@ static void *keymgmt_from_dispatch(int name_id,
         case OSSL_FUNC_KEYMGMT_FREE:
             if (keymgmt->free == NULL)
                 keymgmt->free = OSSL_FUNC_keymgmt_free(fns);
+            break;
+        case OSSL_FUNC_KEYMGMT_LOAD:
+            if (keymgmt->load == NULL)
+                keymgmt->load = OSSL_FUNC_keymgmt_load(fns);
             break;
         case OSSL_FUNC_KEYMGMT_GET_PARAMS:
             if (keymgmt->get_params == NULL) {
@@ -171,7 +174,9 @@ static void *keymgmt_from_dispatch(int name_id,
      * export if you can't import or export.
      */
     if (keymgmt->free == NULL
-        || (keymgmt->new == NULL && keymgmt->gen == NULL)
+        || (keymgmt->new == NULL
+            && keymgmt->gen == NULL
+            && keymgmt->load == NULL)
         || keymgmt->has == NULL
         || (getparamfncnt != 0 && getparamfncnt != 2)
         || (setparamfncnt != 0 && setparamfncnt != 2)
@@ -322,7 +327,7 @@ int evp_keymgmt_gen_set_params(const EVP_KEYMGMT *keymgmt, void *genctx,
     return keymgmt->gen_set_params(genctx, params);
 }
 
-const OSSL_PARAM *evp_keymgmt_gen_settable_params(const EVP_KEYMGMT *keymgmt)
+const OSSL_PARAM *EVP_KEYMGMT_gen_settable_params(const EVP_KEYMGMT *keymgmt)
 {
     void *provctx = ossl_provider_ctx(EVP_KEYMGMT_provider(keymgmt));
 
@@ -345,6 +350,14 @@ void evp_keymgmt_gen_cleanup(const EVP_KEYMGMT *keymgmt, void *genctx)
         keymgmt->gen_cleanup(genctx);
 }
 
+void *evp_keymgmt_load(const EVP_KEYMGMT *keymgmt,
+                       const void *objref, size_t objref_sz)
+{
+    if (keymgmt->load != NULL)
+        return keymgmt->load(objref, objref_sz);
+    return NULL;
+}
+
 int evp_keymgmt_get_params(const EVP_KEYMGMT *keymgmt, void *keydata,
                            OSSL_PARAM params[])
 {
@@ -353,11 +366,13 @@ int evp_keymgmt_get_params(const EVP_KEYMGMT *keymgmt, void *keydata,
     return keymgmt->get_params(keydata, params);
 }
 
-const OSSL_PARAM *evp_keymgmt_gettable_params(const EVP_KEYMGMT *keymgmt)
+const OSSL_PARAM *EVP_KEYMGMT_gettable_params(const EVP_KEYMGMT *keymgmt)
 {
+    void *provctx = ossl_provider_ctx(EVP_KEYMGMT_provider(keymgmt));
+
     if (keymgmt->gettable_params == NULL)
         return NULL;
-    return keymgmt->gettable_params();
+    return keymgmt->gettable_params(provctx);
 }
 
 int evp_keymgmt_set_params(const EVP_KEYMGMT *keymgmt, void *keydata,
@@ -368,11 +383,13 @@ int evp_keymgmt_set_params(const EVP_KEYMGMT *keymgmt, void *keydata,
     return keymgmt->set_params(keydata, params);
 }
 
-const OSSL_PARAM *evp_keymgmt_settable_params(const EVP_KEYMGMT *keymgmt)
+const OSSL_PARAM *EVP_KEYMGMT_settable_params(const EVP_KEYMGMT *keymgmt)
 {
+    void *provctx = ossl_provider_ctx(EVP_KEYMGMT_provider(keymgmt));
+
     if (keymgmt->settable_params == NULL)
         return NULL;
-    return keymgmt->settable_params();
+    return keymgmt->settable_params(provctx);
 }
 
 int evp_keymgmt_has(const EVP_KEYMGMT *keymgmt, void *keydata, int selection)

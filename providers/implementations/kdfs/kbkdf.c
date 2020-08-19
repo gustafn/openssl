@@ -76,6 +76,8 @@ static OSSL_FUNC_kdf_reset_fn kbkdf_reset;
 static OSSL_FUNC_kdf_derive_fn kbkdf_derive;
 static OSSL_FUNC_kdf_settable_ctx_params_fn kbkdf_settable_ctx_params;
 static OSSL_FUNC_kdf_set_ctx_params_fn kbkdf_set_ctx_params;
+static OSSL_FUNC_kdf_gettable_ctx_params_fn kbkdf_gettable_ctx_params;
+static OSSL_FUNC_kdf_get_ctx_params_fn kbkdf_get_ctx_params;
 
 /* Not all platforms have htobe32(). */
 static uint32_t be32(uint32_t host)
@@ -122,7 +124,7 @@ static void kbkdf_reset(void *vctx)
     KBKDF *ctx = (KBKDF *)vctx;
     void *provctx = ctx->provctx;
 
-    EVP_MAC_free_ctx(ctx->ctx_init);
+    EVP_MAC_CTX_free(ctx->ctx_init);
     OPENSSL_clear_free(ctx->context, ctx->context_len);
     OPENSSL_clear_free(ctx->label, ctx->label_len);
     OPENSSL_clear_free(ctx->ki, ctx->ki_len);
@@ -151,7 +153,7 @@ static int derive(EVP_MAC_CTX *ctx_init, kbkdf_mode mode, unsigned char *iv,
     for (counter = 1; written < ko_len; counter++) {
         i = be32(counter);
 
-        ctx = EVP_MAC_dup_ctx(ctx_init);
+        ctx = EVP_MAC_CTX_dup(ctx_init);
         if (ctx == NULL)
             goto done;
 
@@ -172,13 +174,13 @@ static int derive(EVP_MAC_CTX *ctx_init, kbkdf_mode mode, unsigned char *iv,
         written += h;
 
         k_i_len = h;
-        EVP_MAC_free_ctx(ctx);
+        EVP_MAC_CTX_free(ctx);
         ctx = NULL;
     }
 
     ret = 1;
 done:
-    EVP_MAC_free_ctx(ctx);
+    EVP_MAC_CTX_free(ctx);
     return ret;
 }
 
@@ -247,9 +249,9 @@ static int kbkdf_set_ctx_params(void *vctx, const OSSL_PARAM params[])
                                            NULL, NULL, libctx))
         return 0;
     else if (ctx->ctx_init != NULL
-             && !EVP_MAC_is_a(EVP_MAC_get_ctx_mac(ctx->ctx_init),
+             && !EVP_MAC_is_a(EVP_MAC_CTX_mac(ctx->ctx_init),
                               OSSL_MAC_NAME_HMAC)
-             && !EVP_MAC_is_a(EVP_MAC_get_ctx_mac(ctx->ctx_init),
+             && !EVP_MAC_is_a(EVP_MAC_CTX_mac(ctx->ctx_init),
                               OSSL_MAC_NAME_CMAC)) {
         ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_MAC);
         return 0;
@@ -288,7 +290,7 @@ static int kbkdf_set_ctx_params(void *vctx, const OSSL_PARAM params[])
                                                        ctx->ki, ctx->ki_len);
         mparams[1] = OSSL_PARAM_construct_end();
 
-        if (!EVP_MAC_set_ctx_params(ctx->ctx_init, mparams)
+        if (!EVP_MAC_CTX_set_params(ctx->ctx_init, mparams)
             || !EVP_MAC_init(ctx->ctx_init))
             return 0;
     }
@@ -296,7 +298,7 @@ static int kbkdf_set_ctx_params(void *vctx, const OSSL_PARAM params[])
     return 1;
 }
 
-static const OSSL_PARAM *kbkdf_settable_ctx_params(void)
+static const OSSL_PARAM *kbkdf_settable_ctx_params(ossl_unused void *provctx)
 {
     static const OSSL_PARAM known_settable_ctx_params[] = {
         OSSL_PARAM_octet_string(OSSL_KDF_PARAM_INFO, NULL, 0),
@@ -326,7 +328,7 @@ static int kbkdf_get_ctx_params(void *vctx, OSSL_PARAM params[])
     return OSSL_PARAM_set_size_t(p, SIZE_MAX);
 }
 
-static const OSSL_PARAM *kbkdf_gettable_ctx_params(void)
+static const OSSL_PARAM *kbkdf_gettable_ctx_params(ossl_unused void *provctx)
 {
     static const OSSL_PARAM known_gettable_ctx_params[] =
         { OSSL_PARAM_size_t(OSSL_KDF_PARAM_SIZE, NULL), OSSL_PARAM_END };

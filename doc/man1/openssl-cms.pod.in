@@ -83,6 +83,7 @@ B<openssl> B<cms>
 {- $OpenSSL::safe::opt_r_synopsis -}
 {- $OpenSSL::safe::opt_engine_synopsis -}
 {- $OpenSSL::safe::opt_provider_synopsis -}
+{- $OpenSSL::safe::opt_config_synopsis -}
 [I<recipient-cert> ...]
 
 =for openssl ifdef des-wrap engine
@@ -501,6 +502,8 @@ Any verification errors cause the command to exit.
 
 {- $OpenSSL::safe::opt_provider_item -}
 
+{- $OpenSSL::safe::opt_config_item -}
+
 =item I<recipient-cert> ...
 
 One or more certificates of message recipients: used when encrypting
@@ -780,6 +783,8 @@ All B<-keyform> values except B<ENGINE> have become obsolete in OpenSSL 3.0.0
 and have no effect.
 
 The B<-nameopt> option was added in OpenSSL 3.0.0.
+
+The B<-engine> option was deprecated in OpenSSL 3.0.
 
 =head1 COPYRIGHT
 
